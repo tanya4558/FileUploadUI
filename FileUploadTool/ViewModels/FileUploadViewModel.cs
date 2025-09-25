@@ -1,4 +1,5 @@
 ﻿using FileUploadTool.Models;
+using FileUploadTool.Utils;
 using Microsoft.Win32;
 using System;
 using System.Collections.Generic;
@@ -9,6 +10,7 @@ using System.Net.Http;
 using System.Text;
 using System.Text.Json;
 using System.Threading.Tasks;
+using System.Windows;
 using System.Windows.Input;
 
 namespace FileUploadTool.ViewModels
@@ -21,7 +23,7 @@ namespace FileUploadTool.ViewModels
         private CancellationTokenSource _cts;
         private bool _isPaused = false;
         private string _sessionId;
-        private HttpClient _httpClient = new HttpClient { BaseAddress = new Uri("https://localhost:44346/") };
+        private HttpClient _httpClient = new HttpClient { BaseAddress = new Uri("https://localhost:44343/") };
         private bool _isCancelled = false;
         public ICommand SelectFilesCommand { get; }
         public ICommand StartUploadCommand { get; }
@@ -42,142 +44,172 @@ namespace FileUploadTool.ViewModels
 
         public async Task InitUploadSessionAsync()
         {
-            var payload = JsonSerializer.Serialize(Files.Count);
-            var response = await _httpClient.PostAsync("FileUpload/init",
-                new StringContent(payload, System.Text.Encoding.UTF8, "application/json")); response.EnsureSuccessStatusCode();
-            var json = await response.Content.ReadAsStringAsync();
-            var result = JsonSerializer.Deserialize<Dictionary<string, string>>(json);
-            _sessionId = result["sessionId"];
+            try
+            {
+                var payload = JsonSerializer.Serialize(Files.Count);
+                var response = await _httpClient.PostAsync("FileUpload/init",
+                    new StringContent(payload, System.Text.Encoding.UTF8, "application/json")); response.EnsureSuccessStatusCode();
+                var json = await response.Content.ReadAsStringAsync();
+                var result = JsonSerializer.Deserialize<Dictionary<string, string>>(json);
+                _sessionId = result["sessionId"];
+                Logger.WriteLog($"Error initializing session");
+            }
+            catch (Exception ex)
+            {
+                Logger.WriteLog($"Error initializing session: {ex.Message}");
+                MessageBox.Show($"Error initializing upload session: {ex.Message}", "Error", MessageBoxButton.OK, MessageBoxImage.Error);
+            }
         }
         private void SelectFiles()
         {
-            var dlg = new OpenFileDialog { Multiselect = true };
-            if (dlg.ShowDialog() == true)
+            try
             {
-                Files.Clear();
-                foreach (var file in dlg.FileNames)
-                    Files.Add(new FileUploadItem { FilePath = file });
-                _currentIndex = 0;
+                var dlg = new OpenFileDialog { Multiselect = true };
+                if (dlg.ShowDialog() == true)
+                {
+                    Files.Clear();
+                    foreach (var file in dlg.FileNames)
+                        Files.Add(new FileUploadItem { FilePath = file });
+                    _currentIndex = 0;
+                }
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"Error selecting files: {ex.Message}", "Error",MessageBoxButton.OK, MessageBoxImage.Error);
             }
         }
 
         private async Task StartUploadAsync()
         {
-            _cts = new CancellationTokenSource();
-            _isPaused = false;
-            await UploadFilesAsync(_cts.Token);
+            try
+            {
+                _cts = new CancellationTokenSource();
+                _isPaused = false;
+                await UploadFilesAsync(_cts.Token);
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"Error starting upload: {ex.Message}", "Error", MessageBoxButton.OK, MessageBoxImage.Error);
+            }
         }
         private void PauseUpload()
         {
-            _isPaused = true;
-            _isCancelled = false;
-            _cts?.Cancel();
-            foreach (var file in Files.Where(f => f.Status == "Uploading" || f.Status == "Pending"))
-                file.Status = "Paused";
-        }
-        private async Task ResumeUploadAsync1()
-        {
-            // Set all paused files to "Pending" so they are picked up by the upload loop
-            foreach (var file in Files.Where(f => f.Status == "Paused" || f.Status == "Resumed"))
-                file.Status = "Pending"; 
-            if (string.IsNullOrEmpty(_sessionId)) return;
-            var response = await _httpClient.GetAsync($"FileUpload/status?sessionId={_sessionId}");
-            response.EnsureSuccessStatusCode();
-            var json = await response.Content.ReadAsStringAsync();
-            var result = JsonSerializer.Deserialize<Dictionary<string, int[]>>(json);
-            var uploaded = result["uploadedFiles"];
-
-            for (int i = 0; i < Files.Count; i++)
+            try
             {
-                if (uploaded.Contains(i))
-                    Files[i].Status = "Uploaded";
-                else if (Files[i].Status != "Cancelled" && Files[i].Status != "Failed")
-                    Files[i].Status = "Pending";
+                _isPaused = true;
+                _isCancelled = false;
+                _cts?.Cancel();
+                foreach (var file in Files.Where(f => f.Status == "Uploading" || f.Status == "Pending"))
+                    file.Status = "Paused";
             }
-            _currentIndex = Files.ToList().FindIndex(f => f.Status == "Pending");
-            if (_currentIndex == -1) return; // No files left to upload
-
-            await UploadFilesAsync(_cts.Token);
+            catch (Exception ex)
+            {
+                MessageBox.Show($"Error pausing upload: {ex.Message}", "Error", MessageBoxButton.OK, MessageBoxImage.Error);
+            }
         }
         private async Task ResumeUploadAsync()
         {
-            foreach (var file in Files.Where(f => f.Status == "Paused" || f.Status == "Resumed"))
-                file.Status = "Pending";
-
-            if (string.IsNullOrEmpty(_sessionId)) return;
-
-            var response = await _httpClient.GetAsync($"FileUpload/status?sessionId={_sessionId}");
-            response.EnsureSuccessStatusCode();
-            var json = await response.Content.ReadAsStringAsync();
-            var result = JsonSerializer.Deserialize<Dictionary<string, int[]>>(json);
-            var uploaded = result["uploadedFiles"];
-
-            for (int i = 0; i < Files.Count; i++)
+            try
             {
-                if (uploaded.Contains(i))
-                    Files[i].Status = "Uploaded";
-                else if (Files[i].Status != "Cancelled" && Files[i].Status != "Failed")
-                    Files[i].Status = "Pending";
-            }
-            _currentIndex = Files.ToList().FindIndex(f => f.Status == "Pending");
-            if (_currentIndex == -1) return; // No files left to upload
+                foreach (var file in Files.Where(f => f.Status == "Paused" || f.Status == "Resumed"))
+                    file.Status = "Pending";
 
-            _cts = new CancellationTokenSource(); // <-- Ensure new token source
-            await UploadFilesAsync(_cts.Token);
+                if (string.IsNullOrEmpty(_sessionId)) return;
+
+                var response = await _httpClient.GetAsync($"FileUpload/status?sessionId={_sessionId}");
+                response.EnsureSuccessStatusCode();
+                var json = await response.Content.ReadAsStringAsync();
+                var result = JsonSerializer.Deserialize<Dictionary<string, int[]>>(json);
+                var uploaded = result["uploadedFiles"];
+
+                for (int i = 0; i < Files.Count; i++)
+                {
+                    if (uploaded.Contains(i))
+                        Files[i].Status = "Uploaded";
+                    else if (Files[i].Status != "Cancelled" && Files[i].Status != "Failed")
+                        Files[i].Status = "Pending";
+                }
+                _currentIndex = Files.ToList().FindIndex(f => f.Status == "Pending");
+                if (_currentIndex == -1) return;
+
+                _cts = new CancellationTokenSource();
+                await UploadFilesAsync(_cts.Token);
+            }
+            catch (Exception ex)
+            {
+                Logger.WriteLog($"Error resuming: {ex.Message}");
+                MessageBox.Show($"Error resuming upload session: {ex.Message}", "Error", MessageBoxButton.OK, MessageBoxImage.Error);
+            }
         }
 
         private async Task UploadFilesAsync(CancellationToken token)
         {
-            if (string.IsNullOrEmpty(_sessionId))
-                await InitUploadSessionAsync();
-
-            for (; _currentIndex < Files.Count; _currentIndex++)
+            try
             {
-                var file = Files[_currentIndex];
+                if (string.IsNullOrEmpty(_sessionId))
+                    await InitUploadSessionAsync();
 
-                // Only process files that are Pending
-                if (file.Status != "Pending") continue;
-
-                if (token.IsCancellationRequested)
+                for (; _currentIndex < Files.Count; _currentIndex++)
                 {
-                    if (_currentIndex >= 0 && _currentIndex < Files.Count)
+                    var file = Files[_currentIndex];
+
+                    // Only process files that are Pending
+                    if (file.Status != "Pending") continue;
+
+                    if (token.IsCancellationRequested)
                     {
-                        if (_isCancelled)
-                            Files[_currentIndex].Status = "Cancelled";
-                        else if (_isPaused)
-                            Files[_currentIndex].Status = "Paused";
+                        if (_currentIndex >= 0 && _currentIndex < Files.Count)
+                        {
+                            if (_isCancelled)
+                                Files[_currentIndex].Status = "Cancelled";
+                            else if (_isPaused)
+                                Files[_currentIndex].Status = "Paused";
+                        }
+                        break;
                     }
-                    break;
+
+                    file.Status = "Uploading";
+                    try
+                    {
+                        using var fileStream = File.OpenRead(file.FilePath);
+                        using var content = new MultipartFormDataContent();
+                        content.Add(new StringContent(_sessionId), nameof(FileUploadModel.SessionId));
+                        content.Add(new StringContent(_currentIndex.ToString()), nameof(FileUploadModel.FileIndex));
+                        content.Add(new StreamContent(fileStream), "File", Path.GetFileName(file.FilePath));
+
+                        var response = await _httpClient.PostAsync("FileUpload/upload", content, token);
+                        if (response.IsSuccessStatusCode)
+                            file.Status = "Uploaded";
+                        else
+                            file.Status = "Failed";
+
+                    }
+                    catch (Exception exFile)
+                    {
+                        file.Status = "Failed";
+                        Logger.WriteLog($"Error uploading {file.FileName}: {exFile.Message}");
+                    }
                 }
-                
-                file.Status = "Uploading";
-                using var fileStream = File.OpenRead(file.FilePath);
-                using var content = new MultipartFormDataContent();
-                content.Add(new StringContent(_sessionId), nameof(FileUploadModel.SessionId));
-                content.Add(new StringContent(_currentIndex.ToString()), nameof(FileUploadModel.FileIndex));
-                content.Add(new StreamContent(fileStream), "File", Path.GetFileName(file.FilePath));
-                try
-                {
-                    var response = await _httpClient.PostAsync("FileUpload/upload", content, token);
-                    if (response.IsSuccessStatusCode)
-                        file.Status = "Uploaded";
-                    else
-                        file.Status = "Failed";// Mark as failed
-                                               // Optionally, log response.StatusCode and response.Content for diagnostics
-                }
-                catch (Exception ex)
-                {
-                    file.Status = "Failed";
-                    // Optionally, log ex.Message for diagnostics
-                }
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"Error during file upload {ex.Message}", "Error", MessageBoxButton.OK, MessageBoxImage.Error);
             }
         }
         private void CancelUpload()
         {
-            _isCancelled = true;
-            _cts?.Cancel();
-            foreach (var file in Files.Where(f => f.Status == "Uploading" || f.Status == "Pending" || f.Status == "Paused"))
-                file.Status = "Cancelled";
+            try
+            {
+                _isCancelled = true;
+                _cts?.Cancel();
+                foreach (var file in Files.Where(f => f.Status == "Uploading" || f.Status == "Pending" || f.Status == "Paused"))
+                    file.Status = "Cancelled";
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"Error cancelling file upload {ex.Message}", "Error", MessageBoxButton.OK, MessageBoxImage.Error);
+            }
+
         }
         private void ClearFiles()
         {
